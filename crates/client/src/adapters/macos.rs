@@ -34,6 +34,7 @@ impl Autostart for MacOs {
         let log = home()?.join("Library/Logs/headhub.log");
         fs::create_dir_all(plist.parent().expect("plist path has a parent"))?;
         fs::write(&plist, plist_body(exe, &log))?;
+        // Fails when the agent is not loaded yet, which is the normal first install.
         let _ = launchctl(&["bootout", &domain()?, &plist.to_string_lossy()]);
         launchctl(&["bootstrap", &domain()?, &plist.to_string_lossy()])?;
         println!(
@@ -47,6 +48,7 @@ impl Autostart for MacOs {
     fn uninstall(&self) -> Result<()> {
         let plist = plist_path()?;
         if plist.exists() {
+            // Fails when the agent is already stopped; removing the file is what matters.
             let _ = launchctl(&["bootout", &domain()?, &plist.to_string_lossy()]);
             fs::remove_file(&plist)?;
         }

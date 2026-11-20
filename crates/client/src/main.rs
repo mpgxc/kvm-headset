@@ -16,6 +16,9 @@ use crate::{
     ports::{Autostart, VirtualCable},
 };
 
+/// How long `activate` and `status` wait for the hub before reporting it unreachable.
+const REPLY_TIMEOUT: Duration = Duration::from_secs(2);
+
 #[derive(Parser)]
 #[command(about = "Usa o headset do hub head-hub neste PC")]
 struct Cli {
@@ -48,13 +51,24 @@ enum Cmd {
 }
 
 /// Saved by `setup`, read by every other command.
-#[derive(Debug, Serialize, Deserialize)]
-pub struct Config {
+#[derive(Serialize, Deserialize)]
+pub(crate) struct Config {
     /// `host:port` of the hub.
-    pub hub: String,
-    pub token: String,
+    pub(crate) hub: String,
+    /// Pairing token; kept out of `Debug` output.
+    pub(crate) token: String,
     /// Name this PC registers with.
-    pub name: String,
+    pub(crate) name: String,
+}
+
+impl std::fmt::Debug for Config {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Config")
+            .field("hub", &self.hub)
+            .field("token", &"<redacted>")
+            .field("name", &self.name)
+            .finish()
+    }
 }
 
 impl Config {
@@ -140,7 +154,7 @@ fn main() -> Result<()> {
 fn print_status(config: &Config, request: &Packet) -> Result<()> {
     let socket = UdpSocket::bind("0.0.0.0:0")?;
     socket.connect(&config.hub)?;
-    socket.set_read_timeout(Some(Duration::from_secs(2)))?;
+    socket.set_read_timeout(Some(REPLY_TIMEOUT))?;
     let mut out = Vec::new();
     request.encode(&mut out)?;
     socket.send(&out)?;

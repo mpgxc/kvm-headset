@@ -182,20 +182,20 @@ fn main() -> Result<()> {
             Packet::Hello { token, name } if token == hub.token => {
                 hub.register(name, from);
                 hub.status(&mut out)?;
-                let _ = socket.send_to(&out, from);
+                send(&socket, &out, from);
             }
             Packet::Query { token } if token == hub.token => {
                 hub.status(&mut out)?;
-                let _ = socket.send_to(&out, from);
+                send(&socket, &out, from);
             }
             Packet::Activate { token, name } if token == hub.token => {
                 hub.activate(name);
                 hub.status(&mut out)?;
                 // Everyone learns the switch now instead of at the next heartbeat.
                 for (_, client) in hub.live() {
-                    let _ = socket.send_to(&out, client.addr);
+                    send(&socket, &out, client.addr);
                 }
-                let _ = socket.send_to(&out, from);
+                send(&socket, &out, from);
             }
             Packet::Hello { .. } | Packet::Query { .. } | Packet::Activate { .. } => {
                 warn!("token inválido de {from}");
@@ -220,8 +220,15 @@ fn stream_mic(frames: &Receiver<Frame>, socket: &UdpSocket, hub: &Mutex<Hub>) ->
                 .map(|(_, c)| c.addr),
         );
         for addr in &targets {
-            let _ = socket.send_to(&out, addr);
+            send(socket, &out, *addr);
         }
     }
     anyhow::bail!("captura do microfone parou")
+}
+
+/// UDP is best effort: a lost reply is repeated by the next heartbeat, so failures only log.
+fn send(socket: &UdpSocket, packet: &[u8], to: SocketAddr) {
+    if let Err(err) = socket.send_to(packet, to) {
+        debug!("envio para {to}: {err}");
+    }
 }

@@ -73,7 +73,9 @@ pub fn run(config: &Config, cable: &Cable) -> Result<()> {
                 // Inactive PC stays muted: its audio is captured and dropped.
                 if active.load(Ordering::Relaxed) {
                     encoder.encode(&frame, &mut out)?;
-                    let _ = socket.send(&out);
+                    if let Err(err) = socket.send(&out) {
+                        debug!("envio de áudio: {err}");
+                    }
                 }
             }
             anyhow::bail!("captura da saída virtual parou")

@@ -21,37 +21,58 @@ const AUDIO: u8 = 5;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Packet<'a> {
     /// Client heartbeat: registers `name` at the sender address. Sent every second.
-    Hello { token: &'a str, name: &'a str },
+    Hello {
+        /// Pairing token shared by hub and clients.
+        token: &'a str,
+        /// Non-empty PC name.
+        name: &'a str,
+    },
     /// Makes `name` the PC that owns the headset output.
-    Activate { token: &'a str, name: &'a str },
+    Activate {
+        /// Pairing token shared by hub and clients.
+        token: &'a str,
+        /// Non-empty PC name; it may not be connected yet.
+        name: &'a str,
+    },
     /// Asks the hub for a [`Packet::Status`] without registering.
-    Query { token: &'a str },
+    Query {
+        /// Pairing token shared by hub and clients.
+        token: &'a str,
+    },
     /// Hub state, sent in reply to every control packet and on every switch.
     Status {
+        /// PC that owns the headset output, if any.
         active: Option<&'a str>,
+        /// Connected PCs, sorted by name.
         clients: Vec<&'a str>,
     },
-    /// One Opus frame. `seq` wraps and lets the receiver conceal lost frames.
-    Audio { seq: u16, payload: &'a [u8] },
+    /// One Opus frame.
+    Audio {
+        /// Wrapping sequence number that lets the receiver conceal lost frames.
+        seq: u16,
+        /// Opus packet for one 10 ms mono frame.
+        payload: &'a [u8],
+    },
 }
 
 impl<'a> Packet<'a> {
     /// Serializes the packet into `out`, replacing its contents.
     ///
     /// # Errors
-    /// Fails when a string is longer than 255 bytes.
+    /// Fails when a string is longer than 255 bytes, a PC name is empty, or there are more
+    /// than 255 clients.
     pub fn encode(&self, out: &mut Vec<u8>) -> Result<()> {
         out.clear();
         match self {
             Packet::Hello { token, name } => {
                 out.push(HELLO);
                 put_str(out, token)?;
-                put_str(out, name)?;
+                put_name(out, name)?;
             }
             Packet::Activate { token, name } => {
                 out.push(ACTIVATE);
                 put_str(out, token)?;
-                put_str(out, name)?;
+                put_name(out, name)?;
             }
             Packet::Query { token } => {
                 out.push(QUERY);
@@ -59,11 +80,16 @@ impl<'a> Packet<'a> {
             }
             Packet::Status { active, clients } => {
                 out.push(STATUS);
-                put_str(out, active.unwrap_or(""))?;
-                ensure!(clients.len() <= usize::from(u8::MAX), "too many clients");
-                out.push(clients.len() as u8);
+                // An empty name on the wire means "no active PC", so real names are never empty.
+                match active {
+                    Some(name) => put_name(out, name)?,
+                    None => put_str(out, "")?,
+                }
+                let count = u8::try_from(clients.len())
+                    .with_context(|| format!("too many clients: {}", clients.len()))?;
+                out.push(count);
                 for client in clients {
-                    put_str(out, client)?;
+                    put_name(out, client)?;
                 }
             }
             Packet::Audio { seq, payload } => {
@@ -84,11 +110,11 @@ impl<'a> Packet<'a> {
         let packet = match tag {
             HELLO => Packet::Hello {
                 token: take_str(&mut rest)?,
-                name: take_str(&mut rest)?,
+                name: take_name(&mut rest)?,
             },
             ACTIVATE => Packet::Activate {
                 token: take_str(&mut rest)?,
-                name: take_str(&mut rest)?,
+                name: take_name(&mut rest)?,
             },
             QUERY => Packet::Query {
                 token: take_str(&mut rest)?,
@@ -98,7 +124,7 @@ impl<'a> Packet<'a> {
                 let (&count, tail) = rest.split_first().context("truncated status")?;
                 rest = tail;
                 let clients = (0..count)
-                    .map(|_| take_str(&mut rest))
+                    .map(|_| take_name(&mut rest))
                     .collect::<Result<_>>()?;
                 Packet::Status { active, clients }
             }
@@ -131,6 +157,18 @@ fn take_str<'a>(rest: &mut &'a [u8]) -> Result<&'a str> {
     let (s, tail) = tail.split_at(usize::from(len));
     *rest = tail;
     Ok(std::str::from_utf8(s)?)
+}
+
+/// PC names are never empty: an empty string means "no active PC" in [`Packet::Status`].
+fn put_name(out: &mut Vec<u8>, name: &str) -> Result<()> {
+    ensure!(!name.is_empty(), "empty PC name");
+    put_str(out, name)
+}
+
+fn take_name<'a>(rest: &mut &'a [u8]) -> Result<&'a str> {
+    let name = take_str(rest)?;
+    ensure!(!name.is_empty(), "empty PC name");
+    Ok(name)
 }
 
 #[cfg(test)]
@@ -179,10 +217,37 @@ mod tests {
             &[][..],
             &[9],
             &[HELLO, 5, b'a'],
+            &[HELLO, 0, 0],
+            &[ACTIVATE, 1, b't', 0],
+            &[STATUS, 0, 1, 0],
             &[QUERY, 0, 0],
             &[AUDIO, 1],
         ] {
             assert!(Packet::decode(bad).is_err(), "accepted {bad:?}");
+        }
+    }
+
+    #[test]
+    fn refuses_to_encode_empty_names() {
+        let packets = [
+            Packet::Hello {
+                token: "t",
+                name: "",
+            },
+            Packet::Status {
+                active: Some(""),
+                clients: vec![],
+            },
+            Packet::Status {
+                active: None,
+                clients: vec![""],
+            },
+        ];
+        for packet in packets {
+            assert!(
+                packet.encode(&mut Vec::new()).is_err(),
+                "encoded {packet:?}"
+            );
         }
     }
 

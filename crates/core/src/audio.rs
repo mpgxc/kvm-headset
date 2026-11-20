@@ -42,11 +42,17 @@ const MAX_CONCEALED: u16 = 3;
 const REORDER_WINDOW: u16 = 50;
 /// Captured frames buffered for the encoder thread (80 ms) before new ones are dropped.
 const CAPTURE_BACKLOG: usize = 8;
+/// Loss rate the encoder plans FEC for; above the 1% the PRD tolerates, so FEC is always on.
+const EXPECTED_LOSS_PERCENT: i32 = 5;
+/// Samples in one millisecond, to report queue levels.
+const SAMPLES_PER_MS: usize = FRAME / 10;
 
 /// Which side of a device to open.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Direction {
+    /// Capture: microphones and loopback/monitor devices.
     Input,
+    /// Playback: speakers and virtual sinks.
     Output,
 }
 
@@ -132,7 +138,7 @@ fn stream_config(device: &Device, direction: Direction) -> Result<(StreamConfig,
             )
         })
         .with_context(|| format!("'{device}' não suporta {SAMPLE_RATE} Hz em f32 ou i16"))?;
-    let frame = FRAME as u32;
+    let frame = u32::try_from(FRAME).expect("FRAME is a small constant");
     let buffer_size = match supported.buffer_size() {
         SupportedBufferSize::Range { min, max } if (*min..=*max).contains(&frame) => {
             BufferSize::Fixed(frame)
@@ -152,6 +158,7 @@ where
     f32: FromSample<T>,
 {
     let channels = usize::from(config.channels);
+    let channel_count = f32::from(config.channels);
     let mut frame = [0.0; FRAME];
     let mut filled = 0;
     let stream = device.build_input_stream(
@@ -159,7 +166,7 @@ where
         move |data: &[T], _: &_| {
             for chunk in data.chunks(channels) {
                 let sum: f32 = chunk.iter().map(|s| f32::from_sample(*s)).sum();
-                frame[filled] = sum / channels as f32;
+                frame[filled] = sum / channel_count;
                 filled += 1;
                 if filled == FRAME {
                     // A full channel means the encoder stalled; dropping keeps latency bounded.
@@ -214,6 +221,14 @@ pub struct FrameEncoder {
     scratch: [u8; MAX_PACKET],
 }
 
+impl std::fmt::Debug for FrameEncoder {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("FrameEncoder")
+            .field("seq", &self.seq)
+            .finish_non_exhaustive()
+    }
+}
+
 impl FrameEncoder {
     /// Creates an encoder with in-band FEC, so one lost packet is recovered from the next.
     ///
@@ -223,7 +238,7 @@ impl FrameEncoder {
         let mut opus = opus::Encoder::new(SAMPLE_RATE, opus::Channels::Mono, application)?;
         opus.set_bitrate(opus::Bitrate::Bits(bitrate))?;
         opus.set_inband_fec(true)?;
-        opus.set_packet_loss_perc(5)?;
+        opus.set_packet_loss_perc(EXPECTED_LOSS_PERCENT)?;
         Ok(Self {
             opus,
             seq: 0,
@@ -253,6 +268,7 @@ pub const STATS_INTERVAL: std::time::Duration = std::time::Duration::from_secs(1
 /// Stream health since the last [`FrameDecoder::take_stats`] (RF8).
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct Stats {
+    /// Packets decoded.
     pub received: u32,
     /// Packets that never arrived (sequence gaps), concealed or not.
     pub lost: u32,
@@ -267,12 +283,12 @@ pub struct Stats {
 impl Stats {
     /// Lost packets as a percentage of expected ones.
     #[must_use]
-    pub fn loss_percent(&self) -> f32 {
+    pub fn loss_percent(&self) -> f64 {
         let expected = self.received + self.lost;
         if expected == 0 {
             0.0
         } else {
-            100.0 * self.lost as f32 / expected as f32
+            100.0 * f64::from(self.lost) / f64::from(expected)
         }
     }
 }
@@ -300,7 +316,18 @@ pub struct FrameDecoder {
     stats: Stats,
 }
 
+impl std::fmt::Debug for FrameDecoder {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("FrameDecoder")
+            .field("next_seq", &self.next_seq)
+            .field("stats", &self.stats)
+            .finish_non_exhaustive()
+    }
+}
+
 impl FrameDecoder {
+    /// Creates a decoder that plays into `queue`, usually the one returned by [`playback`].
+    ///
     /// # Errors
     /// Fails when libopus cannot create a decoder.
     pub fn new(queue: Queue) -> Result<Self> {
@@ -321,7 +348,7 @@ impl FrameDecoder {
             .lock()
             .expect("playback queue lock poisoned")
             .len();
-        let queued_ms = (queued * 1000 / SAMPLE_RATE as usize) as u32;
+        let queued_ms = u32::try_from(queued / SAMPLES_PER_MS).unwrap_or(u32::MAX);
         Stats {
             queued_ms,
             ..std::mem::take(&mut self.stats)
@@ -461,10 +488,7 @@ mod tests {
     fn queue_is_trimmed_when_the_sender_runs_ahead() {
         let (queued, stats) = feed(&(0..20).collect::<Vec<_>>());
         assert!(queued <= MAX_QUEUED, "queue grew to {queued}");
-        assert_eq!(
-            stats.queued_ms as usize,
-            queued * 1000 / SAMPLE_RATE as usize
-        );
+        assert_eq!(stats.queued_ms as usize, queued / SAMPLES_PER_MS);
     }
 
     #[test]

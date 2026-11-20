@@ -80,6 +80,7 @@ impl Autostart for Linux {
     fn uninstall(&self) -> Result<()> {
         let unit = unit_path()?;
         if unit.exists() {
+            // Fails when the unit is already stopped; removing the file is what matters.
             let _ = systemctl(&["disable", "--now", UNIT]);
             fs::remove_file(&unit)?;
             systemctl(&["daemon-reload"])?;
