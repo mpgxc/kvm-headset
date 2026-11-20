@@ -1,0 +1,22 @@
+[package]
+name = "headhub"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow.workspace = true
+clap.workspace = true
+serde.workspace = true
+toml.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+headhub-core.workspace = true
+
+# PulseAudio host (also served by pipewire-pulse) so per-app virtual devices are reachable;
+# cpal picks it over ALSA when a server is running.
+[target.'cfg(target_os = "linux")'.dependencies]
+cpal = { workspace = true, features = ["pulseaudio"] }

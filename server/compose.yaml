@@ -1,0 +1,17 @@
+services:
+  hub:
+    image: headhub-hub
+    restart: always
+    # tini forwards SIGTERM, so restarts take ~1 s instead of the 10 s kill timeout.
+    init: true
+    # Host network: clients are reached at their real LAN addresses over UDP.
+    network_mode: host
+    # Mounted instead of `devices:` so a dongle plugged in later shows up after a restart.
+    device_cgroup_rules:
+      - "c 116:* rmw"
+    group_add:
+      - audio
+    env_file: .env
+    volumes:
+      - /dev/snd:/dev/snd
+      - ./data:/data

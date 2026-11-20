@@ -1,0 +1,14 @@
+[package]
+name = "headhub-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow.workspace = true
+cpal.workspace = true
+opus.workspace = true
+tracing.workspace = true
