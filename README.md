@@ -111,3 +111,34 @@ headhub setup --hub 192.168.18.100 --token <token>
 `setup` cria os dispositivos virtuais e instala o serviço de usuário `headhub.service` no systemd (log: `journalctl --user -u headhub -f`). Os dispositivos são recriados a cada início do agente, porque somem quando o servidor de som reinicia.
 
 Nos apps, use **headhub-speaker** como saída e **headhub-mic** como microfone. Para trocar por atalho, associe `~/.cargo/bin/headhub activate` a uma tecla nas configurações de atalhos do ambiente gráfico.
+
+## Próximos passos
+
+Em ordem de prioridade. Os códigos (RF/RNF) são do [PRD](docs/PRD.md).
+
+### Validar o que já existe
+
+- [ ] **Latência ponta a ponta (RNF1, até 80 ms):** medir com teste acústico (falar no headset e gravar o retorno). Hoje só os componentes são conhecidos: buffer de jitter entre 20 e 35 ms, frames de 10 ms e o rádio do G435.
+- [ ] **PCs Linux:** instalar o cliente nos dois PCs. O adapter foi testado só com PulseAudio num container; faltam o serviço do systemd e o PipeWire (`pipewire-pulse`).
+- [ ] **Critérios de sucesso do PRD:** 20 de 20 trocas entre os 3 PCs, 7 dias sem intervenção e reconexão em até 10 s após reiniciar o Orange Pi.
+- [ ] **CPU no Orange Pi (RNF6):** medir com os 3 PCs conectados (com 1 PC: 17% de um núcleo).
+
+### Completar o cliente
+
+- [ ] `scripts/install-linux.sh`, equivalente ao instalador do macOS (dependências, `pactl`, `headhub setup`).
+- [ ] Adapter Windows (`adapters/windows.rs`): VB-Cable como cabo virtual e Agendador de Tarefas para o início automático.
+- [ ] Atalho global nativo para `activate` (RF3); hoje depende do app Atalhos ou do ambiente gráfico.
+- [ ] `headhub status` com perda e buffer do microfone (RF8); hoje essas métricas só aparecem nos logs.
+
+### Qualidade de áudio
+
+- [ ] Fade de 20 a 50 ms na troca de PC, para evitar estalo.
+- [ ] Ganho do microfone por software no hub: o G435 chega com pico perto de 0.1 com o ganho de captura no máximo.
+- [ ] Saída em estéreo (hoje tudo é mono).
+
+### Operação e segurança
+
+- [ ] Descoberta do hub por mDNS (RF1); hoje o IP é configurado à mão.
+- [ ] Página local para trocar o PC ativo e ver o status (RF3/RF8).
+- [ ] Criptografia do tráfego (RNF5). A v1 usa UDP sem criptografia, aceitável só na LAN.
+- [ ] CI no GitHub Actions com `cargo fmt --check`, `cargo clippy -- -D warnings` e `cargo test`, incluindo build do cliente Linux.
